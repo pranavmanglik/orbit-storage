@@ -1,17 +1,41 @@
 # Orbit Storage: security
 
-## Package-specific security guidance
+The object storage contract normalizes metadata and validates several text boundaries, but it does
+not decide who may access an object or how stored bytes are protected. Those controls belong to the
+application, provider adapter, cloud IAM configuration, and deployment.
 
-The README does not define separate package-specific security guarantees. Follow the implemented API and provider documentation; do not infer security properties that are not documented and tested.
+## Access control and object keys
 
-## Credentials and sensitive data
+Authorize reads, writes, and deletes in the application. The contract has no user or tenant
+context and does not enforce key prefixes. If a tenant prefix is part of the access boundary,
+derive it from trusted authorization state and validate it server-side; do not accept a caller's
+arbitrary prefix as proof of ownership.
 
-Use least-privilege credentials and a secret manager for provider secrets. Do not commit secrets, tokens, private keys, personal data, request bodies, raw provider errors, or opaque cursors. Enable TLS certificate verification for remote services unless package documentation gives a narrowly scoped local-development exception.
+Treat keys and continuation tokens as opaque data, not filesystem paths or credentials. Do not
+normalize object keys with path functions. The common key validator rejects control characters and
+limits UTF-8 size, but does not prevent path-looking segments, public access, or cross-tenant
+collisions.
 
-## Vulnerability disclosure
+## Upload and download content
 
-Follow the repository [security policy](../../SECURITY.md). Do not post vulnerability details in public issues. The policy describes private reporting alternatives without claiming that a hosting-platform setting is enabled.
+Pydantic validation of metadata does not inspect the uploaded file. Treat content type as an
+untrusted hint. Apply application-specific size limits, malware scanning, content validation, and
+safe download headers where the use case requires them. The protocol accepts streaming sources, so
+enforce limits while consuming chunks as well as before upload when a length is known.
 
-## Limits
+Do not log object bytes, sensitive metadata, full keys containing personal information, signed
+URLs, credentials, or provider response bodies. Use a separate provider identity with only the
+required bucket/container actions. Configure verified TLS for remote endpoints and keep credentials
+in approved secret stores.
 
-This page records source and package documentation, not an independent security audit. Validate the package, its provider SDKs, and its deployment configuration before production use.
+## Durability and data protection
+
+Encryption at rest, customer-managed keys, versioning, object lock, retention, legal holds, backup,
+replication, and deletion behavior are outside the shared contract. Configure and test them in the
+provider and account. An ETag is not a portable content hash or integrity assertion. Verify
+checksums with an application-supported mechanism when content integrity is critical.
+
+## Vulnerability reporting
+
+Follow the repository [security policy](../../SECURITY.md) for private vulnerability reporting.
+This package guidance is not an IAM or cloud security audit.

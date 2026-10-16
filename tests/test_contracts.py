@@ -33,12 +33,17 @@ from orbit_storage import (
 
 def test_object_key_is_opaque_bounded_text_not_a_path() -> None:
     assert validate_object_key("folder/../object.bin") == "folder/../object.bin"
+    assert validate_object_key("🛰" * 256) == "🛰" * 256
     with pytest.raises(ValueError, match="between 1 and 1024"):
         validate_object_key("")
     with pytest.raises(ValueError, match="control characters"):
         validate_object_key("bad\nkey")
     with pytest.raises(ValueError, match="between 1 and 1024"):
         validate_object_key("x" * 1025)
+    with pytest.raises(ValueError, match="between 1 and 1024"):
+        validate_object_key("🛰" * 257)
+    with pytest.raises(ValueError, match="valid UTF-8"):
+        validate_object_key("\ud800")
 
 
 def test_object_info_validates_bounded_metadata_and_is_immutable() -> None:
@@ -136,6 +141,8 @@ def test_object_page_has_bounded_metadata_entries_and_opaque_token() -> None:
     assert page.continuation_token == "vendor-token"
     with pytest.raises(ValidationError):
         ObjectPage(items=(), continuation_token="x" * 4097)
+    with pytest.raises(ValidationError, match="control characters"):
+        ObjectPage(items=(), continuation_token="token\r\nheader: value")
 
 
 def test_list_request_bounds_pages_and_token_inputs() -> None:

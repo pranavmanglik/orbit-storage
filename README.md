@@ -1,9 +1,10 @@
 # Orbit Storage
 
 `orbit-storage` defines a provider-neutral asynchronous object storage capability. It has no cloud
-SDK, HTTP client, filesystem backend, or dependency on Orbit Core. The planned `orbit-storage-s3`,
-`orbit-storage-gcs`, and `orbit-storage-azure` packages can implement its `ObjectStore` protocol without
-making vendor dependencies mandatory for applications that only need the contract.
+SDK, HTTP client, filesystem backend, or dependency on Orbit Core. The separately installable
+`orbit-storage-s3`, `orbit-storage-gcs`, and `orbit-storage-azure` packages implement the
+`ObjectStore` protocol without making vendor dependencies mandatory for applications that only
+need the contract.
 
 ```bash
 python -m pip install orbit-storage
@@ -30,12 +31,12 @@ response on normal completion, failure, or cancellation. Concurrent close calls 
 and cancellation is propagated only after that cleanup finishes. This avoids requiring whole-object
 buffering for large files. Use
 `ListObjectsRequest` to validate page size (1–1000), prefix, and bounded opaque continuation tokens.
-`put` creates or
-replaces a key; `get` returns `None` for an absent key; `delete` reports whether the key existed.
+`put` creates or replaces a key; `get` returns `None` for an absent key; `delete` reports whether
+the key existed.
 `OBJECT_STORE_DEPENDENCY_KEY` (`orbit.storage`) is the shared Core-container key adapters may use
 to expose their implementation consistently.
-Object keys are opaque bounded strings—not filesystem paths—and list tokens are opaque and specific
-to the provider and configured bucket. The adapter configures its bucket/container, credentials,
+Object keys are opaque strings bounded to 1,024 UTF-8 bytes—not filesystem paths—and list tokens are
+opaque and specific to the provider and configured bucket. The adapter configures its bucket/container, credentials,
 transport, retries, and resource lifetime. Conditional writes, versioning, consistency, encryption,
 retention, and multipart upload remain provider-specific and are not promised by this contract.
 
@@ -56,6 +57,6 @@ ruff check .
 mypy
 ```
 
-This package is pre-alpha, its API is not stable, and it supports Python 3.11 through 3.14.
+This package is alpha, its API is not stable, and it supports Python 3.11 through 3.14.
 Licensed under Apache-2.0.
 

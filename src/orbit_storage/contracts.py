@@ -41,9 +41,19 @@ UploadBody = bytes | AsyncIterable[bytes]
 
 
 def validate_object_key(value: str) -> str:
-    """Validate an opaque storage key without treating it as a filesystem path."""
-    if not isinstance(value, str) or not value or len(value) > _MAX_KEY_LENGTH:
-        raise ValueError("Object keys must contain between 1 and 1024 characters.")
+    """Validate an opaque UTF-8 key without treating it as a filesystem path.
+
+    The common byte bound is portable across object-store providers. Slash and dot segments remain
+    ordinary key characters; callers and adapters must never resolve this value as a local path.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError("Object keys must contain between 1 and 1024 UTF-8 bytes.")
+    try:
+        encoded_length = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        raise ValueError("Object keys must be valid UTF-8 text.") from None
+    if encoded_length > _MAX_KEY_LENGTH:
+        raise ValueError("Object keys must contain between 1 and 1024 UTF-8 bytes.")
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
         raise ValueError("Object keys cannot contain control characters.")
     return value
@@ -113,16 +123,21 @@ class ObjectInfo(BaseModel):
 
 @runtime_checkable
 class ObjectReader(Protocol):
-    """Async byte reader with explicit close support for streamed downloads."""
+    """Async byte reader with explicit close support for streamed downloads.
+
+    Iteration yields non-empty ``bytes`` chunks until ``StopAsyncIteration``. Adapters should
+    choose a bounded chunk size and close the underlying response at EOF. Callers must still close
+    early-terminated readers, preferably by using the owning :class:`StoredObject` context.
+    """
 
     def __aiter__(self) -> AsyncIterator[bytes]:
         """Return the asynchronous iterator over bounded byte chunks."""
 
     async def __anext__(self) -> bytes:
-        """Return the next byte chunk or raise ``StopAsyncIteration``."""
+        """Return the next non-empty byte chunk or raise ``StopAsyncIteration`` at EOF."""
 
     async def aclose(self) -> None:
-        """Release the provider response and any network resources it owns."""
+        """Release the response and return or close any provider network resources it owns."""
 
 
 @dataclass(slots=True)
@@ -130,8 +145,9 @@ class StoredObject:
     """Metadata plus a streamed response body that callers must close.
 
     Use this as an async context manager so the response is closed even when consumption fails or
-    is cancelled. The store adapter remains responsible for constructing a reader that releases
-    its provider response in ``aclose``.
+    is cancelled. Exhausting the reader should also release the response. The store adapter
+    remains responsible for constructing a reader that releases its provider response in
+    ``aclose``. Callers that stop reading early must exit the context or call ``aclose`` explicitly.
     """
 
     info: ObjectInfo
@@ -207,6 +223,16 @@ class ObjectPage(BaseModel):
     items: tuple[ObjectInfo, ...] = Field(max_length=1000)
     continuation_token: StrictStr | None = Field(default=None, max_length=4096)
 
+    @field_validator("continuation_token")
+    @classmethod
+    def validate_token(cls, value: str | None) -> str | None:
+        """Reject control characters before provider tokens cross application boundaries."""
+        if value is not None and any(
+            ord(character) < 32 or ord(character) == 127 for character in value
+        ):
+            raise ValueError("Continuation tokens cannot contain control characters.")
+        return value
+
 
 class StorageError(Exception):
     """Base class for sanitized provider-neutral object storage failures."""
@@ -222,7 +248,13 @@ class StorageOperationError(StorageError):
 
 @runtime_checkable
 class ObjectStore(Protocol):
-    """Async object-store contract; the adapter owns bucket and client configuration."""
+    """Async object-store contract; the adapter owns bucket and client configuration.
+
+    Implementations validate keys and metadata before sending requests, normalize returned
+    metadata through ``ObjectInfo``, translate provider failures to ``StorageOperationError``,
+    and let ``asyncio.CancelledError`` propagate. A store owns its client resources until
+    ``aclose`` completes. This interface does not expose conditional writes or version selection.
+    """
 
     async def put(
         self,
@@ -232,13 +264,24 @@ class ObjectStore(Protocol):
         content_type: str | None = None,
         metadata: Mapping[str, str] | None = None,
     ) -> ObjectInfo:
-        """Create or replace an object and return its normalized metadata."""
+        """Create or replace one object and return normalized metadata.
+
+        ``body`` is either already materialized ``bytes`` or a one-pass async iterable of byte
+        chunks. Stream producers must not assume that a provider can retry or replay consumed
+        chunks. Implementations should validate every yielded chunk and document upload buffering
+        bounds. ``metadata`` is bounded user metadata and is provider-normalized by the adapter.
+        """
 
     async def get(self, key: str) -> StoredObject | None:
-        """Return an object, or ``None`` when the key is absent."""
+        """Open an object stream, or return ``None`` when the key is absent.
+
+        The caller owns the returned ``StoredObject`` lifetime and must close it, preferably with
+        ``async with``. Missing-object behavior must be distinguished from permission and transport
+        failures, which are operation errors.
+        """
 
     async def delete(self, key: str) -> bool:
-        """Delete an object and report whether it existed."""
+        """Delete one object and report whether it existed before this operation."""
 
     async def list_page(
         self,
@@ -247,10 +290,19 @@ class ObjectStore(Protocol):
         limit: int = 100,
         continuation_token: str | None = None,
     ) -> ObjectPage:
-        """Return a bounded page; tokens are opaque and specific to one adapter/bucket."""
+        """Return one bounded metadata page for keys matching ``prefix``.
+
+        Continuation tokens are opaque and bound to the adapter and its bucket/container
+        configuration. Pass a token only to the same configured store; do not parse, persist across
+        provider changes, or treat it as an authorization credential.
+        """
 
     async def aclose(self) -> None:
-        """Release resources owned by this store; repeated calls should be safe."""
+        """Release the client and other resources owned by this store.
+
+        Successful repeated close calls should be safe. Adapters document whether close drains
+        uploads/downloads already in progress and how provider cleanup failures are reported.
+        """
 
 
 __all__ = [
